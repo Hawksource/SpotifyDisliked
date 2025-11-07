@@ -85,11 +85,15 @@ async def getCode():
             "Content-Type": "application/x-www-form-urlencoded",
             "Authorization": "Basic " + b64_auth_string
         }
-        refresh_response = requests.post(url, data=refresh_payload, headers=headers)
-        data = json.loads(refresh_response.text.strip())
-        activeToken = data["access_token"]
-        #print("New access token: " + activeToken)
-        print("Refreshed access token")
+        try:
+            refresh_response = requests.post(url, data=refresh_payload, headers=headers)
+            data = json.loads(refresh_response.text.strip())
+            activeToken = data["access_token"]
+            #print("New access token: " + activeToken)
+            print("Refreshed access token")
+        except (TypeError, KeyError) as e:
+            print("Error: Scope: getCode: refresh-token: " + e)
+            exit(-4)
         await asyncio.sleep(3590)
 
 #finds the 'Disliked' playlist id and sets a global variable
