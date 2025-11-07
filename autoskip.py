@@ -105,6 +105,9 @@ def findDislikedPlaylist():
         "Authorization": "Bearer " + activeToken
     }
     user_data_unformatted = requests.get(url=url, headers=headers)
+    if user_data_unformatted.status_code != 200:
+        print("Error: Scope: findDislikedPlaylist: accessToken is invalid.")
+        exit(-5)
     user_data = json.loads(user_data_unformatted.text.strip())
     user_id = user_data["id"]
     ##Gets user playlist from user_id
@@ -140,6 +143,9 @@ def getCurrentlyPlaying():
         currently_playing_unformatted = json.loads(currently_playing_unformatted_fetch.text.strip())["item"]
         artist = currently_playing_unformatted["album"]["artists"][0]["name"]
         song_name = currently_playing_unformatted["name"]
+        actively_playing = json.loads(currently_playing_unformatted_fetch.text.strip())["is_playing"]
+        if not actively_playing:
+            return None
     except (TypeError, KeyError) as e:
         if last_error_type is  not type(e):
             print("Error: Scope: getCurrentlyPlaying - One of the JSON keys is not valid, mostly happens when DJ talks")
