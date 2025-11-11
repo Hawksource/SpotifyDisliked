@@ -20,6 +20,11 @@ import base64
 import json
 import os
 
+from datetime import datetime
+
+from requests import JSONDecodeError
+from urllib3.exceptions import NameResolutionError
+
 activeToken = ""
 refreshToken = ""
 clientID = "732ea1b7d28d4e19a44233e44df2fdb2"
@@ -27,11 +32,65 @@ clientSecret = os.getenv('SPOTIFY_CLIENT_SECRET',None)
 dislikedPlaylistId=""
 currentlyPlaying = (None,None)
 file_path = "~/Scripts/spotify_refresh.txt"
+error_file_path = "~/Scripts/spotify_error_logs.txt"
 last_error_type = ""
 
 if clientSecret is None:
     print("Error: SPOTIFY_CLIENT_SECRET environment variable must be set.")
     exit(-3)
+
+
+def apiCall(url, headers=None, payload=None, method="GET", first_filter="items"):
+    request_response = None
+    global last_error_type
+    try:
+        if method.upper() == "GET":
+            request_response = requests.get(url=url, headers=headers, data=payload)
+        elif method.upper() == "POST":
+            request_response = requests.post(url=url, headers=headers, data=payload)
+        else:
+            print(f"Error: Scope: apiCall - Illegal method: '{method}'")
+            return "_error"
+    except (ConnectionError, ConnectionResetError, NameResolutionError) as e:
+        if last_error_type is not type(e):
+            last_error_type = type(e)
+            print("Error: Connection Error: You are most likely disconnected from the internet")
+            return "_error"
+    except Exception as e:
+        if last_error_type is not type(e):
+            last_error_type = type(e)
+            if type(e) is requests.exceptions.ConnectionError:
+                print("Error: Connection Error: You are most likely disconnected from the internet")
+            else:
+                print(f"There was an unexpected error, it has been logged at: {error_file_path}")
+                with open(os.path.expanduser(error_file_path), "a") as f:
+                    f.write(f"{datetime.now()}  ::  {type(e)}  ::  {str(e)}\n\n")
+        return "_error"
+    if request_response.status_code != 200:
+        if last_error_type != "non200":
+            print(f"Error: request did not return 200 to {url}")
+            last_error_type = "non200"
+        return "_error"
+    if first_filter == "_nodata":
+        return "_nodata"
+    if first_filter is None:
+        return json.loads(request_response.text.strip())
+    try:
+        unformatted = json.loads(request_response.text.strip())[first_filter]
+    except (KeyError, JSONDecodeError, TypeError) as e:
+        if last_error_type is not type(e):
+            print("Error: Scope: apiCall json filter- One of the JSON keys is not valid, mostly happens when DJ talks")
+            last_error_type = type(e)
+        return "_error"
+    except Exception as e:
+        print(f"There was an unexpected error, it has been logged at: {error_file_path}")
+        if last_error_type is not type(e):
+            last_error_type = type(e)
+            with open(os.path.expanduser(error_file_path), "a") as f:
+                f.write(f"{datetime.now()}  ::  {str(e)}")
+        return "_error"
+    return unformatted
+
 
 #This function runs async and periodically updates the global activeToken
 async def getCode():
@@ -59,16 +118,14 @@ async def getCode():
             "Content-Type": "application/x-www-form-urlencoded"
         }
 
-        response = requests.post(url, data=payload, headers=headers)
+        response = apiCall(url=url,headers=headers,payload=payload,method="POST",first_filter=None)
         if response.status_code == 200:
             activeToken = response.json()["access_token"]
             refreshToken = response.json()["refresh_token"]
             with open(os.path.expanduser(file_path), "w") as f:
                 f.write(refreshToken)
-            #print("Initial user access token: " + activeToken)
-            #print("Initial user refresh token: " + refreshToken)
         else:
-            print("unable to get initial access token, exiting")
+            print("Error: unable to get initial access token, exiting")
             print(response)
             await asyncio.sleep(10)
             exit(-1)
@@ -85,16 +142,13 @@ async def getCode():
             "Content-Type": "application/x-www-form-urlencoded",
             "Authorization": "Basic " + b64_auth_string
         }
-        try:
-            refresh_response = requests.post(url, data=refresh_payload, headers=headers)
-            data = json.loads(refresh_response.text.strip())
-            activeToken = data["access_token"]
-            #print("New access token: " + activeToken)
+        data = apiCall(url=url,headers=headers,payload=refresh_payload,method="POST",first_filter="access_token")
+        if data == "_error": #recall get code if failed
+            getCode()
+        else:
+            activeToken = data
             print("Refreshed access token")
-        except (TypeError, KeyError) as e:
-            print("Error: Scope: getCode: refresh-token: " + e)
-            exit(-4)
-        await asyncio.sleep(3590)
+            await asyncio.sleep(3590)
 
 #finds the 'Disliked' playlist id and sets a global variable
 def findDislikedPlaylist():
@@ -104,12 +158,9 @@ def findDislikedPlaylist():
     headers = {
         "Authorization": "Bearer " + activeToken
     }
-    user_data_unformatted = requests.get(url=url, headers=headers)
-    if user_data_unformatted.status_code != 200:
-        print("Error: Scope: findDislikedPlaylist: accessToken is invalid.")
+    user_id = apiCall(url=url, headers=headers,method="GET",first_filter="id")
+    if user_id == "_error":
         exit(-5)
-    user_data = json.loads(user_data_unformatted.text.strip())
-    user_id = user_data["id"]
     ##Gets user playlist from user_id
     url = f"https://api.spotify.com/v1/users/{user_id}/playlists"
     headers = {
@@ -117,8 +168,9 @@ def findDislikedPlaylist():
         "limit": "50",
         "offset": "0"
     }
-    playlists_unformatted = requests.get(url=url, headers=headers)
-    playlists = json.loads(playlists_unformatted.text.strip())["items"]
+    playlists = apiCall(url=url,headers=headers,method="GET")
+    if playlists == "_error":
+        exit(-6)
     for playlist in playlists:
         if playlist["name"] == "Disliked":
             dislikedPlaylistId = playlist["id"]
@@ -136,16 +188,14 @@ def getCurrentlyPlaying():
     headers = {
         "Authorization": "Bearer " + activeToken,
     }
-    currently_playing_unformatted_fetch = requests.get(url=url, headers=headers)
-    if currently_playing_unformatted_fetch.text == "":
+
+    currently_playing_unformatted_fetch = apiCall(url=url,headers=headers,method="GET",first_filter=None)
+    if currently_playing_unformatted_fetch == "_error" or currently_playing_unformatted_fetch["is_playing"] == False or currently_playing_unformatted_fetch == "":
         return None
     try:
-        currently_playing_unformatted = json.loads(currently_playing_unformatted_fetch.text.strip())["item"]
+        currently_playing_unformatted = currently_playing_unformatted_fetch["item"]
         artist = currently_playing_unformatted["album"]["artists"][0]["name"]
         song_name = currently_playing_unformatted["name"]
-        actively_playing = json.loads(currently_playing_unformatted_fetch.text.strip())["is_playing"]
-        if not actively_playing:
-            return None
     except (TypeError, KeyError) as e:
         if last_error_type is  not type(e):
             print("Error: Scope: getCurrentlyPlaying - One of the JSON keys is not valid, mostly happens when DJ talks")
@@ -160,7 +210,7 @@ def skipSong():
     headers = {
         "Authorization": "Bearer " + activeToken
     }
-    requests.post(url=url, headers=headers)
+    apiCall(url=url,headers=headers,method="POST",first_filter="_nodata")
     print("Skipped a song")
 
 #creates a list of (artist, song) tuples from the "Dislikes" playlist
@@ -183,8 +233,9 @@ def checkSong():
     headers = {
         "Authorization": "Bearer " + activeToken,
     }
-    playlist_songs_unformatted_fetch = requests.get(url=url, headers=headers)
-    playlist_songs_unformatted = json.loads(playlist_songs_unformatted_fetch.text.strip())["items"]
+    playlist_songs_unformatted = apiCall(url=url,headers=headers,method="GET")
+    if playlist_songs_unformatted == "_error":
+        exit(-7)
     artist_song_list = []
     for song_metadata in playlist_songs_unformatted:
         artist = song_metadata["track"]["album"]["artists"][0]["name"]
@@ -218,5 +269,5 @@ if __name__ == '__main__':
     time.sleep(3)
     findDislikedPlaylist()
     while True:
-        time.sleep(1)
+        time.sleep(.5)
         checkSong()

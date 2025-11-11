@@ -2,3 +2,4 @@
 *.iml
 .env
 .idea
+spotify_error_logs.txt
