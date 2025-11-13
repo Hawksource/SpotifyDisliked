@@ -67,6 +67,8 @@ def apiCall(url, headers=None, payload=None, method="GET", first_filter="items")
                     f.write(f"{datetime.now()}  ::  {type(e)}  ::  {str(e)}\n\n")
         return "_error"
     if request_response.status_code != 200:
+        if request_response.status_code == 204 and url == "https://api.spotify.com/v1/me/player/currently-playing":
+            return ""
         if last_error_type != "non200":
             print(f"Error: request did not return 200 to {url}")
             last_error_type = "non200"
@@ -190,7 +192,7 @@ def getCurrentlyPlaying():
     }
 
     currently_playing_unformatted_fetch = apiCall(url=url,headers=headers,method="GET",first_filter=None)
-    if currently_playing_unformatted_fetch == "_error" or currently_playing_unformatted_fetch["is_playing"] == False or currently_playing_unformatted_fetch == "":
+    if currently_playing_unformatted_fetch == "_error" or currently_playing_unformatted_fetch == "" or currently_playing_unformatted_fetch["is_playing"] == False:
         return None
     try:
         currently_playing_unformatted = currently_playing_unformatted_fetch["item"]
@@ -269,5 +271,5 @@ if __name__ == '__main__':
     time.sleep(3)
     findDislikedPlaylist()
     while True:
-        time.sleep(.5)
+        time.sleep(1)
         checkSong()
